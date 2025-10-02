@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
+	"go.opentelemetry.io/otel"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -26,6 +30,10 @@ type Telemetry struct {
 
 	tracer trace.Tracer
 	logger logger.Logger
+
+	// Prometheus-specific fields
+	promServer  *http.Server
+	promHandler http.Handler
 }
 
 // Shutdown shuts down the logger, meter, and tracer.
@@ -33,10 +41,21 @@ type Telemetry struct {
 func (t *Telemetry) Shutdown(ctx context.Context) error {
 	var err error
 
+	// Shutdown Prometheus HTTP server first
+	if t.promServer != nil {
+		if shutdownErr := t.promServer.Shutdown(ctx); shutdownErr != nil {
+			err = fmt.Errorf("failed to shutdown Prometheus server: %w", shutdownErr)
+		}
+	}
+
 	// Force flush and shutdown logger provider
 	if t.lp != nil {
 		if flushErr := t.lp.ForceFlush(ctx); flushErr != nil {
-			err = fmt.Errorf("failed to flush logs: %w", flushErr)
+			if err != nil {
+				err = fmt.Errorf("%w; failed to flush logs: %w", err, flushErr)
+			} else {
+				err = fmt.Errorf("failed to flush logs: %w", flushErr)
+			}
 		}
 		if shutdownErr := t.lp.Shutdown(ctx); shutdownErr != nil {
 			if err != nil {
@@ -126,6 +145,13 @@ func (t *Telemetry) StartSpanWithLogger(ctx context.Context, name string) (conte
 	return ctx, span, logger
 }
 
+// PrometheusHandler returns the Prometheus HTTP handler for metrics.
+// Returns nil if Prometheus metrics are not enabled.
+// Use this to integrate Prometheus metrics into your own HTTP server.
+func (t *Telemetry) PrometheusHandler() http.Handler {
+	return t.promHandler
+}
+
 // New creates a new Telemetry instance with the given options.
 // If opts is nil, default options with environment variable overrides are used.
 func New(ctx context.Context, opts *Options) (*Telemetry, error) {
@@ -146,11 +172,15 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 	var mp *sdkmetric.MeterProvider
 	var tp *sdktrace.TracerProvider
 	var tracer trace.Tracer
+	var promServer *http.Server
+	var promHandler http.Handler
 	var err error
 
 	// Create resource if OTel is enabled (auto-detected from environment)
+	// or if metrics exporter is explicitly configured
 	var res *resource.Resource
-	if shouldEnableOTel() {
+	metricsExporterSet := opts.MetricsExporter != "" || os.Getenv("OTEL_METRICS_EXPORTER") != ""
+	if shouldEnableOTel() || metricsExporterSet {
 		res = newResource(opts.ServiceName, opts.ServiceVersion)
 	}
 
@@ -172,9 +202,90 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 		tracer = noop.NewTracerProvider().Tracer(opts.ServiceName)
 	}
 
-	mp, err = newMeterProvider(ctx, res, opts.BatchExport)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create meter provider: %w", err)
+	// Initialize meter provider based on exporter type
+	// Check if metrics exporter is explicitly set in options or environment
+	exporter := opts.MetricsExporter
+	if exporter == "" {
+		exporter = os.Getenv("OTEL_METRICS_EXPORTER")
+	}
+
+	// Determine if we should enable metrics
+	enableMetrics := false
+	if exporter != "" && exporter != "none" {
+		// Explicitly configured via options or env var
+		enableMetrics = true
+	} else if shouldEnableMetrics() {
+		// Auto-enabled via OTel environment variables
+		enableMetrics = true
+		exporter = "otlp" // Default to OTLP
+	}
+
+	if enableMetrics {
+		// Support multiple exporters via comma-separated list (e.g., "prometheus,otlp")
+		exportersList := strings.Split(exporter, ",")
+		var readers []sdkmetric.Reader
+
+		for _, exp := range exportersList {
+			exp = strings.TrimSpace(exp)
+			if exp == "" || exp == "none" {
+				continue
+			}
+
+			switch exp {
+			case "prometheus":
+				var handler http.Handler
+				var promReader sdkmetric.Reader
+				promReader, handler, err = newPrometheusReader(res)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create Prometheus reader: %w", err)
+				}
+				readers = append(readers, promReader)
+
+				// Store handler for external use (only first Prometheus exporter)
+				if promHandler == nil {
+					promHandler = handler
+				}
+
+				// Only start built-in server if explicitly enabled and not already started
+				if opts.PrometheusServer && promServer == nil {
+					// Start Prometheus HTTP server
+					mux := http.NewServeMux()
+					mux.Handle(opts.PrometheusPath, handler)
+
+					promServer = &http.Server{
+						Addr:    ":" + strconv.Itoa(opts.PrometheusPort),
+						Handler: mux,
+					}
+
+					// Start server in background
+					go func() {
+						if err := promServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+							fmt.Fprintf(os.Stderr, "Prometheus server error: %v\n", err)
+						}
+					}()
+				}
+
+			case "otlp":
+				otlpReader, err := newOTLPReader(ctx, opts.BatchExport)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create OTLP reader: %w", err)
+				}
+				readers = append(readers, otlpReader)
+
+			default:
+				return nil, fmt.Errorf("unsupported metrics exporter: %s (supported: otlp, prometheus, none)", exp)
+			}
+		}
+
+		// Create meter provider with all readers
+		if len(readers) > 0 {
+			meterProviderOptions := []sdkmetric.Option{sdkmetric.WithResource(res)}
+			for _, reader := range readers {
+				meterProviderOptions = append(meterProviderOptions, sdkmetric.WithReader(reader))
+			}
+			mp = sdkmetric.NewMeterProvider(meterProviderOptions...)
+			otel.SetMeterProvider(mp)
+		}
 	}
 
 	// Use provided logger or create default zerolog logger
@@ -212,11 +323,13 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 	}
 
 	return &Telemetry{
-		cfg:    opts,
-		lp:     lp,
-		mp:     mp,
-		tp:     tp,
-		tracer: tracer,
-		logger: log,
+		cfg:         opts,
+		lp:          lp,
+		mp:          mp,
+		tp:          tp,
+		tracer:      tracer,
+		logger:      log,
+		promServer:  promServer,
+		promHandler: promHandler,
 	}, nil
 }

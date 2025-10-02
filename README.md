@@ -15,6 +15,7 @@ Some code and documentation in this project were created or refined with the ass
 - **Optional OpenTelemetry**: Toggle OTel on/off via environment variables
 - **Full Logger Access**: Use the complete API of your chosen logger
 - **OTel Integration**: Seamless integration with OTel logs, traces, and metrics when enabled
+- **Multiple Metric Exporters**: Support for OTLP (push) and Prometheus (pull) metrics
 - **Zero Overhead**: No OTel overhead when disabled
 - **Flexible Configuration**: Environment variables and functional options
 - **Standard Interface**: Common logging interface across different backends
@@ -115,6 +116,28 @@ type Options struct {
     // When false (default): Uses simple/synchronous processors for immediate export
     // Recommended: false for development/debugging, true for high-volume production
     BatchExport bool
+
+    // MetricsExporter specifies which metrics exporter(s) to use: "otlp", "prometheus", or "none"
+    // Supports multiple exporters via comma-separated list: "prometheus,otlp"
+    // When empty, defaults to "otlp" if OTel is enabled
+    // Can be overridden by OTEL_METRICS_EXPORTER environment variable
+    MetricsExporter string
+
+    // PrometheusPort is the HTTP port for the Prometheus metrics endpoint (default: 9090)
+    // Only used when MetricsExporter is "prometheus"
+    // Can be overridden by PROMETHEUS_PORT environment variable
+    PrometheusPort int
+
+    // PrometheusPath is the HTTP path for the Prometheus metrics endpoint (default: "/metrics")
+    // Only used when MetricsExporter is "prometheus"
+    // Can be overridden by PROMETHEUS_PATH environment variable
+    PrometheusPath string
+
+    // PrometheusServer enables the built-in Prometheus HTTP server
+    // When false (default), use PrometheusHandler() to get the handler for your own server
+    // When true, starts an HTTP server on PrometheusPort serving metrics at PrometheusPath
+    // Only used when MetricsExporter is "prometheus"
+    PrometheusServer bool
 }
 ```
 
@@ -144,8 +167,12 @@ The library follows the [OpenTelemetry specification](https://opentelemetry.io/d
 
 **Signal Control:**
 - `OTEL_TRACES_EXPORTER` - Traces exporter (default: `otlp`, set to `none` to disable)
-- `OTEL_METRICS_EXPORTER` - Metrics exporter (default: `otlp`, set to `none` to disable)
+- `OTEL_METRICS_EXPORTER` - Metrics exporter (options: `otlp`, `prometheus`, `none`)
 - `OTEL_LOGS_EXPORTER` - Logs exporter (default: `otlp`, set to `none` to disable)
+
+**Prometheus-Specific:**
+- `PROMETHEUS_PORT` - HTTP port for Prometheus metrics endpoint (default: `9090`)
+- `PROMETHEUS_PATH` - HTTP path for Prometheus metrics endpoint (default: `/metrics`)
 
 **How it works:**
 - OTel is **disabled by default** (no-op providers)
@@ -429,6 +456,169 @@ logger.SetLevel(logger.Disabled)    // Disable all logging
 currentLevel := logger.Level()
 ```
 
+## Metrics
+
+The library supports both OTLP (push-based) and Prometheus (pull-based) metrics exporters.
+
+### OTLP Metrics (Push-Based)
+
+Push metrics to an OpenTelemetry collector:
+
+```go
+t, err := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:     "my-service",
+    ServiceVersion:  "1.0.0",
+    MetricsExporter: "otlp", // Default when OTel is enabled
+})
+```
+
+Or via environment variables:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_METRICS_EXPORTER=otlp  # This is the default
+```
+
+### Prometheus Metrics (Pull-Based)
+
+Expose metrics via HTTP for Prometheus to scrape. **By default**, the Prometheus handler is created but you must integrate it into your own HTTP server:
+
+```go
+t, err := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:     "my-service",
+    ServiceVersion:  "1.0.0",
+    MetricsExporter: "prometheus",
+})
+
+// Get the handler and add to your HTTP server
+handler := t.PrometheusHandler()
+mux := http.NewServeMux()
+mux.Handle("/metrics", handler)
+```
+
+Or via environment variables:
+
+```bash
+export OTEL_METRICS_EXPORTER=prometheus
+```
+
+#### Using the Built-in HTTP Server (Optional)
+
+If you want the library to automatically start an HTTP server for you:
+
+```go
+t, err := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:      "my-service",
+    ServiceVersion:   "1.0.0",
+    MetricsExporter:  "prometheus",
+    PrometheusServer: true,  // Enable built-in HTTP server
+    PrometheusPort:   9090,
+    PrometheusPath:   "/metrics",
+})
+// Metrics will be available at http://localhost:9090/metrics
+```
+
+Or via environment variables:
+
+```bash
+export OTEL_METRICS_EXPORTER=prometheus
+export PROMETHEUS_PORT=9090
+export PROMETHEUS_PATH=/metrics
+```
+
+See the [metrics-prometheus example](./examples/metrics-prometheus) for a complete working example with the built-in server.
+
+#### Integrating with Popular Frameworks
+
+The default behavior (built-in server disabled) makes it easy to integrate with any web framework:
+
+```go
+// Get the handler (built-in server is OFF by default)
+handler := t.PrometheusHandler()
+
+// Gin:    r.GET("/metrics", gin.WrapH(handler))
+// Echo:   e.GET("/metrics", echo.WrapHandler(handler))
+// Chi:    r.Handle("/metrics", handler)
+// Gorilla: r.Handle("/metrics", handler)
+```
+
+See the [metrics-prometheus-custom-server example](./examples/metrics-prometheus-custom-server) for a complete working example.
+
+### Using Metrics
+
+Both exporters support the same OpenTelemetry metric instruments:
+
+```go
+mp := t.MeterProvider()
+meter := mp.Meter("my-component")
+
+// Counter - monotonically increasing
+counter, _ := meter.Int64Counter("requests_total")
+counter.Add(ctx, 1)
+
+// Histogram - distribution of values
+histogram, _ := meter.Float64Histogram("request_duration_ms")
+histogram.Record(ctx, 123.45)
+
+// UpDownCounter - can increase or decrease
+upDownCounter, _ := meter.Int64UpDownCounter("active_connections")
+upDownCounter.Add(ctx, 1)
+
+// Gauge - current value via callback
+gauge, _ := meter.Int64ObservableGauge("memory_usage_bytes",
+    metric.WithInt64Callback(func(ctx context.Context, observer metric.Int64Observer) error {
+        observer.Observe(getMemoryUsage())
+        return nil
+    }),
+)
+```
+
+### Prometheus vs OTLP
+
+| Feature | OTLP | Prometheus |
+|---------|------|------------|
+| Model | Push | Pull |
+| Endpoint | Collector (gRPC) | HTTP `/metrics` |
+| Configuration | `OTEL_EXPORTER_OTLP_ENDPOINT` | `PROMETHEUS_PORT`, `PROMETHEUS_PATH` |
+| Best for | Cloud-native, distributed systems | Traditional monitoring, simple setups |
+| Format | Protobuf (OTLP) | Prometheus exposition format |
+
+See the [metrics-prometheus example](./examples/metrics-prometheus) for a complete working example.
+
+### Dual Export (Prometheus + OTLP)
+
+You can export metrics to both Prometheus and OTLP simultaneously:
+
+```go
+t, err := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:      "my-service",
+    ServiceVersion:   "1.0.0",
+    MetricsExporter:  "prometheus,otlp", // Both exporters!
+    PrometheusServer: true,  // Optional: enable built-in HTTP server
+    PrometheusPort:   9090,
+})
+```
+
+Or via environment variables:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+export OTEL_METRICS_EXPORTER=prometheus,otlp
+export PROMETHEUS_PORT=9090
+```
+
+This allows you to:
+- Expose metrics via HTTP for Prometheus scraping
+- Push the same metrics to an OTLP collector
+- Maintain compatibility with both monitoring systems
+- No duplicate instrumentation code needed
+
+**Use cases:**
+- Migration from Prometheus to OTLP (or vice versa)
+- Hybrid monitoring setups
+- Different teams using different observability platforms
+- A/B testing between monitoring solutions
+
 ## Tracing
 
 ### Basic Tracing
@@ -505,7 +695,10 @@ See the [examples](./examples) directory for complete working examples:
 - [`basic`](./examples/basic) - Basic usage with zerolog, OTel disabled
 - [`with-otel`](./examples/with-otel) - Full OTel integration with tracing
 - [`traces-nested`](./examples/traces-nested) - Nested spans with attributes and events
-- [`metrics`](./examples/metrics) - Counter, histogram, gauge examples
+- [`metrics`](./examples/metrics) - Counter, histogram, gauge examples with OTLP
+- [`metrics-prometheus`](./examples/metrics-prometheus) - Prometheus metrics with built-in HTTP server
+- [`metrics-prometheus-custom-server`](./examples/metrics-prometheus-custom-server) - Prometheus with your own HTTP server
+- [`metrics-dual-export`](./examples/metrics-dual-export) - Export metrics to both Prometheus and OTLP
 - [`full-zerolog-api`](./examples/full-zerolog-api) - Advanced zerolog features
 - [`zerolog-basic`](./examples/zerolog-basic) - Basic zerolog usage
 - [`logrus-basic`](./examples/logrus-basic) - Basic usage with logrus
