@@ -34,6 +34,26 @@ type Options struct {
 	// Batch mode is recommended for high-volume production workloads.
 	// Simple mode is recommended for development and debugging.
 	BatchExport bool
+
+	// MetricsExporter specifies which metrics exporter to use: "otlp", "prometheus", or "none".
+	// When empty, defaults to "otlp" if OTel is enabled via environment variables.
+	// Can be overridden by OTEL_METRICS_EXPORTER environment variable.
+	MetricsExporter string
+
+	// PrometheusPort is the HTTP port for the Prometheus metrics endpoint (default: 9090).
+	// Only used when MetricsExporter is "prometheus".
+	// Can be overridden by PROMETHEUS_PORT environment variable.
+	PrometheusPort int
+
+	// PrometheusPath is the HTTP path for the Prometheus metrics endpoint (default: "/metrics").
+	// Only used when MetricsExporter is "prometheus".
+	// Can be overridden by PROMETHEUS_PATH environment variable.
+	PrometheusPath string
+
+	// PrometheusServer enables the built-in Prometheus HTTP server.
+	// When false (default), use PrometheusHandler() to get the handler and register it
+	// with your own HTTP server. Only used when MetricsExporter is "prometheus".
+	PrometheusServer bool
 }
 
 // DefaultOptions returns Options with default values.
@@ -44,6 +64,8 @@ func DefaultOptions() *Options {
 		LogConsoleOutput: true,
 		LogConsoleColor:  true,
 		BatchExport:      false, // Default to simple/immediate export
+		PrometheusPort:   9090,
+		PrometheusPath:   "/metrics",
 	}
 }
 
@@ -51,6 +73,9 @@ func DefaultOptions() *Options {
 // Standard OpenTelemetry environment variables:
 // - OTEL_SERVICE_NAME: service name
 // - OTEL_SERVICE_VERSION: service version (if supported)
+// - OTEL_METRICS_EXPORTER: metrics exporter type (otlp, prometheus, none)
+// - PROMETHEUS_PORT: Prometheus HTTP port (default: 9090)
+// - PROMETHEUS_PATH: Prometheus HTTP path (default: /metrics)
 func (o *Options) applyEnvVars() {
 	if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
 		o.ServiceName = v
@@ -59,6 +84,17 @@ func (o *Options) applyEnvVars() {
 	// but we support it for convenience alongside OTEL_RESOURCE_ATTRIBUTES
 	if v := os.Getenv("OTEL_SERVICE_VERSION"); v != "" {
 		o.ServiceVersion = v
+	}
+	if v := os.Getenv("OTEL_METRICS_EXPORTER"); v != "" {
+		o.MetricsExporter = v
+	}
+	if v := os.Getenv("PROMETHEUS_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			o.PrometheusPort = port
+		}
+	}
+	if v := os.Getenv("PROMETHEUS_PATH"); v != "" {
+		o.PrometheusPath = v
 	}
 }
 
