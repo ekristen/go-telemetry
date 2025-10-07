@@ -54,10 +54,16 @@ func New(opts Options) *Logger {
 		baseHandler = slog.NewTextHandler(output, handlerOpts)
 	}
 
-	// Wrap with OTel handler if we have a logger provider
+	// Wrap with caller adjustment if AddSource is enabled
 	var handler slog.Handler = baseHandler
+	if opts.AddSource {
+		// Skip 2 additional frames: our Event wrapper methods -> actual caller
+		handler = NewCallerHandler(baseHandler, 2)
+	}
+
+	// Wrap with OTel handler if we have a logger provider
 	if opts.LoggerProvider != nil {
-		otelHandler := NewOTelHandler(baseHandler, opts.ServiceName, opts.ServiceVersion, opts.LoggerProvider)
+		otelHandler := NewOTelHandler(handler, opts.ServiceName, opts.ServiceVersion, opts.LoggerProvider)
 		if otelHandler != nil {
 			handler = otelHandler
 		}
@@ -89,8 +95,17 @@ func (l *Logger) UpdateLoggerProvider(provider *sdklog.LoggerProvider) {
 		return
 	}
 
-	// Wrap base handler with OTel handler
-	otelHandler := NewOTelHandler(l.baseHandler, l.serviceName, l.serviceVersion, provider)
+	// Rebuild handler chain with OTel support
+	var handler slog.Handler = l.baseHandler
+
+	// Re-apply caller adjustment if it was originally enabled
+	// We need to check if we're wrapping a CallerHandler
+	if _, ok := l.Logger.Handler().(*CallerHandler); ok {
+		handler = NewCallerHandler(l.baseHandler, 2)
+	}
+
+	// Wrap with OTel handler
+	otelHandler := NewOTelHandler(handler, l.serviceName, l.serviceVersion, provider)
 	if otelHandler == nil {
 		return
 	}
@@ -114,9 +129,16 @@ func Wrap(slogLogger *slog.Logger, opts WrapOptions) *Logger {
 	// Store the base handler
 	baseHandler := slogLogger.Handler()
 
+	// Build handler chain
+	var handler slog.Handler = baseHandler
+
+	// Note: We cannot add caller adjustment for wrapped loggers since we don't know
+	// if AddSource was enabled. Users wrapping existing loggers should configure
+	// their handlers appropriately before wrapping.
+
 	// If we have a logger provider, wrap the handler with OTel handler
 	if opts.LoggerProvider != nil {
-		otelHandler := NewOTelHandler(baseHandler, opts.ServiceName, opts.ServiceVersion, opts.LoggerProvider)
+		otelHandler := NewOTelHandler(handler, opts.ServiceName, opts.ServiceVersion, opts.LoggerProvider)
 		if otelHandler != nil {
 			slogLogger = slog.New(otelHandler)
 		}
