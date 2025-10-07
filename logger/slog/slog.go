@@ -23,13 +23,14 @@ type Logger struct {
 
 // Options configures the slog logger.
 type Options struct {
-	ServiceName    string
-	ServiceVersion string
-	LoggerProvider *sdklog.LoggerProvider
-	Output         io.Writer
-	Level          slog.Level
-	AddSource      bool // Add source code position (file:line)
-	JSONFormat     bool // Use JSON handler instead of text
+	ServiceName          string
+	ServiceVersion       string
+	LoggerProvider       *sdklog.LoggerProvider
+	Output               io.Writer
+	Level                slog.Level
+	AddSource            bool // Add source code position (file:line)
+	JSONFormat           bool // Use JSON handler instead of text
+	CallerSkipFrameCount int  // Number of stack frames to skip when reporting caller (0 = auto-detect, default: auto-detect)
 }
 
 // New creates a new slog logger with optional OTel integration.
@@ -57,8 +58,14 @@ func New(opts Options) *Logger {
 	// Wrap with caller adjustment if AddSource is enabled
 	var handler slog.Handler = baseHandler
 	if opts.AddSource {
-		// Skip 2 additional frames: our Event wrapper methods -> actual caller
-		handler = NewCallerHandler(baseHandler, 2)
+		skipCount := opts.CallerSkipFrameCount
+		if skipCount == 0 {
+			// Automatic caller detection: walk the call stack to find the first
+			// frame outside of the telemetry library and logger packages.
+			skipCount = logger.FindFirstExternalCaller()
+		}
+		// If CallerSkipFrameCount is explicitly set (> 0), use it as an override.
+		handler = NewCallerHandler(baseHandler, skipCount)
 	}
 
 	// Wrap with OTel handler if we have a logger provider
@@ -100,8 +107,9 @@ func (l *Logger) UpdateLoggerProvider(provider *sdklog.LoggerProvider) {
 
 	// Re-apply caller adjustment if it was originally enabled
 	// We need to check if we're wrapping a CallerHandler
-	if _, ok := l.Logger.Handler().(*CallerHandler); ok {
-		handler = NewCallerHandler(l.baseHandler, 2)
+	if callerHandler, ok := l.Logger.Handler().(*CallerHandler); ok {
+		// Reuse the same skip count that was used during creation
+		handler = NewCallerHandler(l.baseHandler, callerHandler.skip)
 	}
 
 	// Wrap with OTel handler

@@ -269,6 +269,44 @@ if zlog, ok := logger.(*zerologger.Logger); ok {
 }
 ```
 
+#### Automatic Caller Detection
+
+The logger **automatically detects the correct caller location** by walking the call stack at logger creation time. This works seamlessly even when the logger is wrapped in multiple layers (e.g., in a database library, utility package, or helper functions).
+
+```go
+import zerologger "github.com/ekristen/go-telemetry/logger/zerolog"
+
+// Automatic caller detection - just enable it!
+log := zerologger.New(zerologger.Options{
+    Output:       os.Stdout,
+    EnableCaller: true,  // Caller info is automatically accurate
+})
+
+// Works correctly even through wrapper layers
+func myDatabaseHelper(log *zerologger.Logger) {
+    log.Error().Msg("error")  // Shows myDatabaseHelper() location, not logger internals
+}
+```
+
+**How it works**: When `EnableCaller` is true, the logger walks the call stack to find the first frame outside of the telemetry and logger packages. This happens once at logger creation with ~200-400ns overhead, which is negligible compared to logging I/O costs.
+
+**Manual Override** (optional): For edge cases, you can manually set the skip count:
+
+```go
+log := zerologger.New(zerologger.Options{
+    Output:               os.Stdout,
+    EnableCaller:         true,
+    CallerSkipFrameCount: 5, // Override automatic detection
+})
+```
+
+This manual override is rarely needed and primarily useful for:
+- Very deep call stacks (>15 frames)
+- Special wrapper patterns
+- Performance-critical code where you want to avoid stack walking
+
+**Note**: The same automatic caller detection works for all logger backends (zerolog, zap, slog).
+
 ### Logrus
 
 To use logrus instead of zerolog:

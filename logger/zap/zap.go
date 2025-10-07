@@ -25,13 +25,14 @@ type Logger struct {
 
 // Options configures the zap logger.
 type Options struct {
-	ServiceName    string
-	ServiceVersion string
-	LoggerProvider *sdklog.LoggerProvider
-	Output         io.Writer
-	EnableCaller   bool
-	Development    bool // Use development config (pretty printing)
-	JSONFormat     bool // Use JSON encoder
+	ServiceName          string
+	ServiceVersion       string
+	LoggerProvider       *sdklog.LoggerProvider
+	Output               io.Writer
+	EnableCaller         bool
+	Development          bool // Use development config (pretty printing)
+	JSONFormat           bool // Use JSON encoder
+	CallerSkipFrameCount int  // Number of stack frames to skip when reporting caller (0 = auto-detect, default: auto-detect)
 }
 
 // New creates a new zap logger with optional OTel integration.
@@ -75,8 +76,17 @@ func New(opts Options) *Logger {
 	// Create logger options
 	zapOpts := []zap.Option{}
 	if opts.EnableCaller {
-		// AddCallerSkip(2) skips: our Event wrapper methods -> actual caller
-		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(2))
+		skipCount := opts.CallerSkipFrameCount
+		if skipCount == 0 {
+			// Automatic caller detection: walk the call stack to find the first
+			// frame outside of the telemetry library and logger packages.
+			// This eliminates the need for manual skip count configuration.
+			skipCount = logger.FindFirstExternalCaller()
+		}
+		// If CallerSkipFrameCount is explicitly set (> 0), use it as an override.
+		// Zap's AddCallerSkip is relative to the logger creation, so we subtract 2
+		// to account for the wrapper layers between creation and actual logging.
+		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(skipCount-2))
 	}
 	zapOpts = append(zapOpts, zap.AddStacktrace(zapcore.ErrorLevel))
 
@@ -120,8 +130,12 @@ func (l *Logger) UpdateLoggerProvider(provider *sdklog.LoggerProvider) {
 	// Create logger options
 	zapOpts := []zap.Option{}
 	if l.opts.EnableCaller {
-		// AddCallerSkip(2) skips: our Event wrapper methods -> actual caller
-		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(2))
+		skipCount := l.opts.CallerSkipFrameCount
+		if skipCount == 0 {
+			// Automatic caller detection
+			skipCount = logger.FindFirstExternalCaller()
+		}
+		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(skipCount-2))
 	}
 	zapOpts = append(zapOpts, zap.AddStacktrace(zapcore.ErrorLevel))
 

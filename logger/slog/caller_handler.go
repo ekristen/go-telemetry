@@ -10,7 +10,7 @@ import (
 // to skip wrapper frames when AddSource is enabled.
 type CallerHandler struct {
 	base slog.Handler
-	skip int
+	skip int // exported for use in UpdateLoggerProvider
 }
 
 // NewCallerHandler creates a new handler that adjusts caller skip frames.

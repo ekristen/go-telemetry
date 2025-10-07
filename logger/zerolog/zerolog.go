@@ -22,12 +22,13 @@ type Logger struct {
 
 // Options configures the zerolog logger.
 type Options struct {
-	ServiceName    string
-	ServiceVersion string
-	LoggerProvider *sdklog.LoggerProvider
-	Output         io.Writer
-	EnableCaller   bool
-	EnableColor    bool
+	ServiceName          string
+	ServiceVersion       string
+	LoggerProvider       *sdklog.LoggerProvider
+	Output               io.Writer
+	EnableCaller         bool
+	EnableColor          bool
+	CallerSkipFrameCount int // Number of stack frames to skip when reporting caller (0 = auto-detect, default: auto-detect)
 }
 
 // New creates a new zerolog logger with optional OTel integration.
@@ -43,8 +44,16 @@ func New(opts Options) *Logger {
 	// Add timestamp and caller if requested
 	zlog = zlog.With().Timestamp().Logger()
 	if opts.EnableCaller {
-		// Skip 3 frames: runtime.Caller -> zerolog internals -> our Event wrapper -> actual caller
-		zlog = zlog.With().CallerWithSkipFrameCount(3).Logger()
+		skipCount := opts.CallerSkipFrameCount
+		if skipCount == 0 {
+			// Automatic caller detection: walk the call stack to find the first
+			// frame outside of the telemetry library and logger packages.
+			// This eliminates the need for manual skip count configuration.
+			skipCount = logger.FindFirstExternalCaller()
+		}
+		// If CallerSkipFrameCount is explicitly set (> 0), use it as an override.
+		// This allows advanced users to manually tune the skip count for edge cases.
+		zlog = zlog.With().CallerWithSkipFrameCount(skipCount).Logger()
 	}
 
 	// Store base logger before adding hooks
