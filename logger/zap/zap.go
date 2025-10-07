@@ -75,7 +75,8 @@ func New(opts Options) *Logger {
 	// Create logger options
 	zapOpts := []zap.Option{}
 	if opts.EnableCaller {
-		zapOpts = append(zapOpts, zap.AddCaller())
+		// AddCallerSkip(2) skips: our Event wrapper methods -> actual caller
+		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(2))
 	}
 	zapOpts = append(zapOpts, zap.AddStacktrace(zapcore.ErrorLevel))
 
@@ -119,7 +120,8 @@ func (l *Logger) UpdateLoggerProvider(provider *sdklog.LoggerProvider) {
 	// Create logger options
 	zapOpts := []zap.Option{}
 	if l.opts.EnableCaller {
-		zapOpts = append(zapOpts, zap.AddCaller())
+		// AddCallerSkip(2) skips: our Event wrapper methods -> actual caller
+		zapOpts = append(zapOpts, zap.AddCaller(), zap.AddCallerSkip(2))
 	}
 	zapOpts = append(zapOpts, zap.AddStacktrace(zapcore.ErrorLevel))
 

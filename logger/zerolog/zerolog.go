@@ -43,7 +43,8 @@ func New(opts Options) *Logger {
 	// Add timestamp and caller if requested
 	zlog = zlog.With().Timestamp().Logger()
 	if opts.EnableCaller {
-		zlog = zlog.With().Caller().Logger()
+		// Skip 3 frames: runtime.Caller -> zerolog internals -> our Event wrapper -> actual caller
+		zlog = zlog.With().CallerWithSkipFrameCount(3).Logger()
 	}
 
 	// Store base logger before adding hooks
