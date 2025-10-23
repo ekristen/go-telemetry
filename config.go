@@ -3,12 +3,7 @@ package telemetry
 import (
 	"os"
 	"strconv"
-
-	"github.com/ekristen/go-telemetry/logger"
 )
-
-// Logger is an alias for logger.Logger to allow users to specify custom loggers.
-type Logger = logger.Logger
 
 // Options holds configuration for the telemetry system.
 type Options struct {
@@ -16,17 +11,6 @@ type Options struct {
 	ServiceName string
 	// ServiceVersion is the version of the service.
 	ServiceVersion string
-
-	// Logger is the logger implementation to use.
-	// If nil, a default zerolog logger will be created.
-	Logger Logger
-
-	// LogConsoleOutput controls whether logs are written to console.
-	// Only used if Logger is nil.
-	LogConsoleOutput bool
-	// LogConsoleColor controls whether console logs use colors.
-	// Only used if Logger is nil.
-	LogConsoleColor bool
 
 	// BatchExport controls whether telemetry data is exported in batches or immediately.
 	// When true, uses batch processors/exporters for better performance (higher latency).
@@ -59,13 +43,11 @@ type Options struct {
 // DefaultOptions returns Options with default values.
 func DefaultOptions() *Options {
 	return &Options{
-		ServiceName:      "unknown",
-		ServiceVersion:   "unknown",
-		LogConsoleOutput: true,
-		LogConsoleColor:  true,
-		BatchExport:      false, // Default to simple/immediate export
-		PrometheusPort:   9090,
-		PrometheusPath:   "/metrics",
+		ServiceName:    "unknown",
+		ServiceVersion: "unknown",
+		BatchExport:    false, // Default to simple/immediate export
+		PrometheusPort: 9090,
+		PrometheusPath: "/metrics",
 	}
 }
 
