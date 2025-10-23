@@ -16,14 +16,6 @@ func TestDefaultOptions(t *testing.T) {
 		t.Errorf("DefaultOptions().ServiceVersion = %v, want 'unknown'", opts.ServiceVersion)
 	}
 
-	if !opts.LogConsoleOutput {
-		t.Error("DefaultOptions().LogConsoleOutput = false, want true")
-	}
-
-	if !opts.LogConsoleColor {
-		t.Error("DefaultOptions().LogConsoleColor = false, want true")
-	}
-
 	if opts.BatchExport {
 		t.Error("DefaultOptions().BatchExport = true, want false")
 	}
@@ -353,6 +345,233 @@ func TestShouldEnableLogs(t *testing.T) {
 	}
 }
 
+func TestOptions_applyEnvVars_PrometheusSettings(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVars  map[string]string
+		wantPort int
+		wantPath string
+	}{
+		{
+			name:     "no prometheus env vars",
+			envVars:  map[string]string{},
+			wantPort: 9090, // default
+			wantPath: "/metrics",
+		},
+		{
+			name: "PROMETHEUS_PORT set",
+			envVars: map[string]string{
+				"PROMETHEUS_PORT": "8080",
+			},
+			wantPort: 8080,
+			wantPath: "/metrics",
+		},
+		{
+			name: "PROMETHEUS_PATH set",
+			envVars: map[string]string{
+				"PROMETHEUS_PATH": "/custom/metrics",
+			},
+			wantPort: 9090,
+			wantPath: "/custom/metrics",
+		},
+		{
+			name: "both prometheus settings",
+			envVars: map[string]string{
+				"PROMETHEUS_PORT": "7070",
+				"PROMETHEUS_PATH": "/prom",
+			},
+			wantPort: 7070,
+			wantPath: "/prom",
+		},
+		{
+			name: "invalid port number - should keep default",
+			envVars: map[string]string{
+				"PROMETHEUS_PORT": "invalid",
+			},
+			wantPort: 9090, // should keep default on error
+			wantPath: "/metrics",
+		},
+		{
+			name: "empty port string - should keep default",
+			envVars: map[string]string{
+				"PROMETHEUS_PORT": "",
+			},
+			wantPort: 9090,
+			wantPath: "/metrics",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear env vars
+			os.Unsetenv("PROMETHEUS_PORT")
+			os.Unsetenv("PROMETHEUS_PATH")
+			defer func() {
+				os.Unsetenv("PROMETHEUS_PORT")
+				os.Unsetenv("PROMETHEUS_PATH")
+			}()
+
+			// Set test env vars
+			for k, v := range tt.envVars {
+				os.Setenv(k, v)
+			}
+
+			opts := DefaultOptions()
+			opts.applyEnvVars()
+
+			if opts.PrometheusPort != tt.wantPort {
+				t.Errorf("PrometheusPort = %v, want %v", opts.PrometheusPort, tt.wantPort)
+			}
+
+			if opts.PrometheusPath != tt.wantPath {
+				t.Errorf("PrometheusPath = %v, want %v", opts.PrometheusPath, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestOptions_applyEnvVars_MetricsExporter(t *testing.T) {
+	tests := []struct {
+		name         string
+		envVars      map[string]string
+		wantExporter string
+	}{
+		{
+			name:         "no metrics exporter set",
+			envVars:      map[string]string{},
+			wantExporter: "",
+		},
+		{
+			name: "OTEL_METRICS_EXPORTER=otlp",
+			envVars: map[string]string{
+				"OTEL_METRICS_EXPORTER": "otlp",
+			},
+			wantExporter: "otlp",
+		},
+		{
+			name: "OTEL_METRICS_EXPORTER=prometheus",
+			envVars: map[string]string{
+				"OTEL_METRICS_EXPORTER": "prometheus",
+			},
+			wantExporter: "prometheus",
+		},
+		{
+			name: "OTEL_METRICS_EXPORTER=none",
+			envVars: map[string]string{
+				"OTEL_METRICS_EXPORTER": "none",
+			},
+			wantExporter: "none",
+		},
+		{
+			name: "OTEL_METRICS_EXPORTER with multiple exporters",
+			envVars: map[string]string{
+				"OTEL_METRICS_EXPORTER": "prometheus,otlp",
+			},
+			wantExporter: "prometheus,otlp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear env var
+			os.Unsetenv("OTEL_METRICS_EXPORTER")
+			defer os.Unsetenv("OTEL_METRICS_EXPORTER")
+
+			// Set test env vars
+			for k, v := range tt.envVars {
+				os.Setenv(k, v)
+			}
+
+			opts := DefaultOptions()
+			opts.applyEnvVars()
+
+			if opts.MetricsExporter != tt.wantExporter {
+				t.Errorf("MetricsExporter = %v, want %v", opts.MetricsExporter, tt.wantExporter)
+			}
+		})
+	}
+}
+
+func TestOptions_applyEnvVars_AllSettings(t *testing.T) {
+	// Test that all environment variables work together
+	envVars := map[string]string{
+		"OTEL_SERVICE_NAME":     "env-service",
+		"OTEL_SERVICE_VERSION":  "2.0.0",
+		"OTEL_METRICS_EXPORTER": "prometheus",
+		"PROMETHEUS_PORT":       "8888",
+		"PROMETHEUS_PATH":       "/custom",
+	}
+
+	// Clear all env vars
+	for k := range envVars {
+		os.Unsetenv(k)
+	}
+	defer func() {
+		for k := range envVars {
+			os.Unsetenv(k)
+		}
+	}()
+
+	// Set all env vars
+	for k, v := range envVars {
+		os.Setenv(k, v)
+	}
+
+	opts := &Options{
+		ServiceName:     "original-service",
+		ServiceVersion:  "1.0.0",
+		PrometheusPort:  9090,
+		PrometheusPath:  "/metrics",
+		MetricsExporter: "",
+	}
+	opts.applyEnvVars()
+
+	if opts.ServiceName != "env-service" {
+		t.Errorf("ServiceName = %v, want 'env-service'", opts.ServiceName)
+	}
+	if opts.ServiceVersion != "2.0.0" {
+		t.Errorf("ServiceVersion = %v, want '2.0.0'", opts.ServiceVersion)
+	}
+	if opts.MetricsExporter != "prometheus" {
+		t.Errorf("MetricsExporter = %v, want 'prometheus'", opts.MetricsExporter)
+	}
+	if opts.PrometheusPort != 8888 {
+		t.Errorf("PrometheusPort = %v, want 8888", opts.PrometheusPort)
+	}
+	if opts.PrometheusPath != "/custom" {
+		t.Errorf("PrometheusPath = %v, want '/custom'", opts.PrometheusPath)
+	}
+}
+
+func TestDefaultOptions_Values(t *testing.T) {
+	opts := DefaultOptions()
+
+	// Verify all default values
+	if opts.ServiceName != "unknown" {
+		t.Errorf("DefaultOptions().ServiceName = %v, want 'unknown'", opts.ServiceName)
+	}
+
+	if opts.ServiceVersion != "unknown" {
+		t.Errorf("DefaultOptions().ServiceVersion = %v, want 'unknown'", opts.ServiceVersion)
+	}
+
+	if opts.BatchExport {
+		t.Error("DefaultOptions().BatchExport should be false")
+	}
+
+	if opts.PrometheusPort != 9090 {
+		t.Errorf("DefaultOptions().PrometheusPort = %v, want 9090", opts.PrometheusPort)
+	}
+
+	if opts.PrometheusPath != "/metrics" {
+		t.Errorf("DefaultOptions().PrometheusPath = %v, want '/metrics'", opts.PrometheusPath)
+	}
+
+	if opts.MetricsExporter != "" {
+		t.Errorf("DefaultOptions().MetricsExporter = %v, want ''", opts.MetricsExporter)
+	}
+}
+
 // Helper function to clear all OTel environment variables
 func clearOTelEnvVars() {
 	envVars := []string{
@@ -366,6 +585,8 @@ func clearOTelEnvVars() {
 		"OTEL_TRACES_EXPORTER",
 		"OTEL_METRICS_EXPORTER",
 		"OTEL_LOGS_EXPORTER",
+		"PROMETHEUS_PORT",
+		"PROMETHEUS_PATH",
 	}
 
 	for _, v := range envVars {

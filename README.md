@@ -1,9 +1,13 @@
 # go-telemetry
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Reference](https://pkg.go.dev/badge/github.com/ekristen/go-telemetry.svg)](https://pkg.go.dev/github.com/ekristen/go-telemetry)
+[![Go Reference](https://pkg.go.dev/badge/github.com/ekristen/go-telemetry/v2.svg)](https://pkg.go.dev/github.com/ekristen/go-telemetry/v2)
 
-A flexible Go telemetry library with OpenTelemetry support that can be toggled on/off. Provides a standard logging interface while exposing full capabilities of underlying logging frameworks. I needed a telemetry library that was modern and yet flexible. I needed it to be easy to use and integrate with my existing codebase.
+**OpenTelemetry-first** Go telemetry library focused on non-invasive instrumentation. Create your logger externally, attach OTel hooks/cores/handlers, maintain full control and accurate caller reporting.
+
+**Philosophy**: *"Create your logger, attach our hooks"* - not "use our wrapper to create a logger"
+
+**Recommended**: All loggers support accurate caller reporting with the **external hook pattern**. See [examples](#examples) below.
 
 ## AI
 
@@ -11,49 +15,238 @@ Some code and documentation in this project were created or refined with the ass
 
 ## Features
 
-- **Multiple Logger Backends**: Support for zerolog, logrus, zap, and slog
+- **OpenTelemetry First**: Logs, traces, and metrics instrumentation at the forefront
+- **Non-Invasive Integration**: Attach OTel hooks/cores/handlers to your existing loggers
+- **Multiple Logger Backends**: Zap, Zerolog, Logrus, Slog
+- **No Wrappers**: Uses hooks/cores/handlers for OTel integration, not wrapper layers
 - **Optional OpenTelemetry**: Toggle OTel on/off via environment variables
 - **Full Logger Access**: Use the complete API of your chosen logger
-- **OTel Integration**: Seamless integration with OTel logs, traces, and metrics when enabled
 - **Multiple Metric Exporters**: Support for OTLP (push) and Prometheus (pull) metrics
 - **Zero Overhead**: No OTel overhead when disabled
 - **Flexible Configuration**: Environment variables and functional options
-- **Standard Interface**: Common logging interface across different backends
 
 ## Installation
 
 ```bash
-go get github.com/ekristen/go-telemetry
+go get github.com/ekristen/go-telemetry/v2
 ```
 
 ## Quick Start
 
-### Basic Usage (OTel Disabled)
+### Recommended: External Hook Pattern
+
+The **external hook pattern** is the recommended approach for all loggers. You create and configure your logger, then attach OTel integration externally.
+
+**Benefits:**
+- ✅ **Accurate caller reporting** for all loggers
+- ✅ **Full control** over logger configuration
+- ✅ **Non-invasive** - OTel doesn't modify your logger
+- ✅ **Use native API** - idiomatic logger usage
+
+**Example with Logrus:**
 
 ```go
 package main
 
 import (
     "context"
-    "github.com/ekristen/go-telemetry"
+
+    "github.com/ekristen/go-telemetry/v2"
+    logrushook "github.com/ekristen/go-telemetry/v2/hooks/logrus"
+    "github.com/sirupsen/logrus"
 )
 
 func main() {
     ctx := context.Background()
 
-    t, err := telemetry.New(ctx, &telemetry.Options{
+    // Step 1: Create YOUR logger (full control)
+    log := logrus.New()
+    log.SetReportCaller(true)  // Caller info will be accurate!
+    log.SetFormatter(&logrus.JSONFormatter{})
+
+    // Step 2: Initialize OTel
+    t, _ := telemetry.New(ctx, &telemetry.Options{
         ServiceName:    "my-service",
         ServiceVersion: "1.0.0",
     })
-    if err != nil {
-        panic(err)
-    }
     defer t.Shutdown(ctx)
 
-    logger := t.Logger()
-    logger.Info().Str("status", "running").Msg("Service started")
+    // Step 3: Attach OTel hook (non-invasive!)
+    if t.LoggerProvider() != nil {
+        hook := logrushook.New(
+            t.ServiceName(),
+            t.ServiceVersion(),
+            t.LoggerProvider(),
+        )
+        if hook != nil {
+            log.AddHook(hook)
+        }
+    }
+
+    // Step 4: Use native API - logs go to console AND OTel!
+    log.WithFields(logrus.Fields{
+        "status": "running",
+    }).Info("Service started")  // ✅ Accurate caller: yourfile.go:42
 }
 ```
+
+See [Hook Pattern](#hook-pattern-recommended) section below for all loggers.
+
+## Hook Pattern (Recommended)
+
+For **maximum control and accurate caller reporting**, use the external hook pattern where you create your logger externally and attach OTel hooks afterwards.
+
+### Logrus External Hook Example
+
+```go
+import (
+    "github.com/sirupsen/logrus"
+    "github.com/ekristen/go-telemetry/v2"
+    logrushook "github.com/ekristen/go-telemetry/v2/hooks/logrus"
+)
+
+// Step 1: Create and configure YOUR logrus logger
+log := logrus.New()
+log.SetReportCaller(true)  // Caller info will be accurate!
+log.SetFormatter(&logrus.JSONFormatter{PrettyPrint: true})
+log.SetLevel(logrus.DebugLevel)
+
+// Step 2: Initialize OpenTelemetry
+t, _ := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:    "my-service",
+    ServiceVersion: "1.0.0",
+})
+defer t.Shutdown(ctx)
+
+// Step 3: Attach OTel hook to YOUR logger (non-invasive!)
+if t.LoggerProvider() != nil {
+    otelHook := logrushook.New(
+        t.ServiceName(),
+        t.ServiceVersion(),
+        t.LoggerProvider(),
+    )
+    if otelHook != nil {
+        log.AddHook(otelHook)
+    }
+}
+
+// Step 4: Use YOUR logger directly - logs go to console AND OTel!
+log.WithFields(logrus.Fields{
+    "user_id": "123",
+    "action":  "login",
+}).Info("User logged in")  // ✅ Accurate caller: yourfile.go:42
+```
+
+**Why this pattern?**
+
+✅ **Accurate caller reporting** - `SetReportCaller(true)` works correctly
+✅ **Full control** - You configure your logger exactly as needed
+✅ **Non-invasive** - OTel hook added externally, not during logger creation
+✅ **Separation of concerns** - Logging configuration separate from observability
+✅ **No wrapper interface** - Use logrus/zap/zerolog/slog directly with full API
+
+See [examples/logrus](./examples/logrus) for a complete working example.
+
+### Similar Patterns for Other Loggers
+
+**Zap External Core:**
+```go
+import (
+    "github.com/ekristen/go-telemetry/v2"
+    zaphook "github.com/ekristen/go-telemetry/v2/hooks/zap"
+    "go.uber.org/zap"
+    "go.uber.org/zap/zapcore"
+)
+
+// Create your zap logger
+encoder := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+consoleCore := zapcore.NewCore(encoder, zapcore.AddSync(os.Stdout), zapcore.DebugLevel)
+
+// Initialize telemetry
+t, _ := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:    "my-service",
+    ServiceVersion: "1.0.0",
+})
+
+// Add OTel core
+otelCore := zaphook.New(t.ServiceName(), t.ServiceVersion(), t.LoggerProvider())
+core := zapcore.NewTee(consoleCore, otelCore)
+logger := zap.New(core, zap.AddCaller())
+```
+
+**Zerolog External Hook:**
+```go
+import (
+    "github.com/ekristen/go-telemetry/v2"
+    zerologhook "github.com/ekristen/go-telemetry/v2/hooks/zerolog"
+    "github.com/rs/zerolog"
+)
+
+// Create your zerolog logger
+log := zerolog.New(os.Stdout).With().Timestamp().Caller().Logger()
+
+// Initialize telemetry
+t, _ := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:    "my-service",
+    ServiceVersion: "1.0.0",
+})
+
+// Add OTel hook
+hook := zerologhook.New(t.ServiceName(), t.ServiceVersion(), t.LoggerProvider())
+log = log.Hook(hook)
+```
+
+**Slog External Handler:**
+```go
+import (
+    "github.com/ekristen/go-telemetry/v2"
+    sloghook "github.com/ekristen/go-telemetry/v2/hooks/slog"
+    "log/slog"
+)
+
+// Create your slog handler
+baseHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    AddSource: true,  // Enable caller info
+    Level:     slog.LevelDebug,
+})
+
+// Initialize telemetry
+t, _ := telemetry.New(ctx, &telemetry.Options{
+    ServiceName:    "my-service",
+    ServiceVersion: "1.0.0",
+})
+
+// Wrap with OTel handler
+otelHandler := sloghook.New(baseHandler, t.ServiceName(), t.ServiceVersion(), t.LoggerProvider())
+log := slog.New(otelHandler)
+
+// Use native API for accurate caller
+log.Info("message", slog.String("key", "value"))  // ✅ Accurate!
+```
+
+## Logger Comparison
+
+| Feature | Zap | Zerolog | Logrus | Slog |
+|---------|-----|---------|--------|------|
+| **Accurate Caller (External Hook)** | ✅ Yes | ✅ Yes | ✅ Yes* | ✅ Yes** |
+| **Performance** | Excellent | Excellent | Good | Good |
+| **OTel Integration** | Core | Hook | Hook | Handler |
+| **Allocation** | Low | Zero | Medium | Low |
+| **Recommendation** | **Best choice** | Zero-alloc needs | **Use external hook** | **Use external handler** |
+
+\* **Logrus**: Accurate caller with external hook pattern (SetReportCaller before AddHook)
+\*\* **Slog**: Accurate caller with external handler pattern (must use native API)
+
+**See [CALLER_REPORTING.md](CALLER_REPORTING.md) for detailed caller behavior explanation.**
+
+### Why Caller Reporting Matters
+
+Accurate caller information shows the exact file and line in **your code** where logs originated, not library internals. This is crucial for debugging.
+
+**Using external hook/handler pattern (recommended):**
+- **All loggers**: ✅ Report `yourfile.go:123` (your actual code)
+- **Logrus**: Must use `SetReportCaller(true)` before `AddHook()`
+- **Slog**: Must use native API (`log.Info("msg", slog.String(...))`)
 
 ### With OpenTelemetry Enabled
 
@@ -98,18 +291,6 @@ type Options struct {
 
     // ServiceVersion is the version of the service
     ServiceVersion string
-
-    // Logger is the logger implementation to use (zerolog, logrus, zap, slog)
-    // If nil, a default zerolog logger will be created
-    Logger Logger
-
-    // LogConsoleOutput controls whether logs are written to console (default: true)
-    // Only used if Logger is nil
-    LogConsoleOutput bool
-
-    // LogConsoleColor controls whether console logs use colors (default: true)
-    // Only used if Logger is nil
-    LogConsoleColor bool
 
     // BatchExport controls whether telemetry is exported in batches or immediately
     // When true: Uses batch processors for better performance (higher latency)
@@ -157,6 +338,7 @@ The library follows the [OpenTelemetry specification](https://opentelemetry.io/d
 
 **Service Identity:**
 - `OTEL_SERVICE_NAME` - Service name (can also be set in Options)
+- `OTEL_SERVICE_VERSION` - Service version (can also be set in Options)
 - `OTEL_RESOURCE_ATTRIBUTES` - Additional resource attributes
 
 **Exporter Configuration:**
@@ -214,247 +396,27 @@ t, err := telemetry.New(ctx, &telemetry.Options{
 - **Traces**: Syncer (immediate) vs Batcher (periodic)
 - **Metrics**: Always uses PeriodicReader (inherently batched)
 
-## Logger Backends
+## Logger Integration
 
-The library supports multiple logger backends: zerolog (default), logrus, zap, and slog.
+The library provides OTel integration for four popular Go logging libraries through hooks, cores, and handlers in the `hooks/` package:
 
-### Simplified Logger Pattern ✨
+### Integration Packages
 
-**No more repetition!** Create your logger with just logger-specific settings - the telemetry system automatically handles:
-- ✅ Setting service name and version
-- ✅ Adding OTel integration when `OTEL_EXPORTER_OTLP_ENDPOINT` is set
-- ✅ Managing the logger provider lifecycle
+- `github.com/ekristen/go-telemetry/v2/hooks/logrus` - Logrus hook integration
+- `github.com/ekristen/go-telemetry/v2/hooks/zap` - Zap core integration
+- `github.com/ekristen/go-telemetry/v2/hooks/zerolog` - Zerolog hook integration
+- `github.com/ekristen/go-telemetry/v2/hooks/slog` - Slog handler integration
 
-**Example:**
-```go
-// Create logger with just logger config (no service info needed!)
-zapLog := zaplogger.New(zaplogger.Options{
-    Output:       os.Stdout,
-    EnableCaller: true,
-    Development:  true,
-})
+### Integration Pattern
 
-// Telemetry sets everything else automatically
-t, err := telemetry.New(ctx, &telemetry.Options{
-    ServiceName:    "my-service",  // Set once here
-    ServiceVersion: "1.0.0",       // Set once here
-    Logger:         zapLog,
-})
-```
+All integrations follow the same pattern:
 
-This works for all logger backends: zerolog, logrus, zap, and slog!
+1. **Create your logger** with your preferred configuration
+2. **Initialize telemetry** with service name and version
+3. **Attach OTel integration** using the appropriate hook/core/handler
+4. **Use your logger** natively - logs go to both your output and OTel
 
-### Zerolog (Default)
-
-The library uses zerolog by default and exposes the full zerolog API:
-
-```go
-import zerologger "github.com/ekristen/go-telemetry/logger/zerolog"
-
-logger := t.Logger()
-
-// Type assert to access full zerolog capabilities
-if zlog, ok := logger.(*zerologger.Logger); ok {
-    // Full zerolog API access through the embedded Logger field
-    zlog.Logger.Info().
-        Str("user", "john").
-        Int("age", 30).
-        Time("timestamp", time.Now()).
-        Msg("User logged in")
-
-    // Use any zerolog feature
-    contextLogger := zlog.Logger.With().
-        Str("request_id", "req-123").
-        Logger()
-}
-```
-
-### Logrus
-
-To use logrus instead of zerolog:
-
-```go
-import (
-    "os"
-    logruslogger "github.com/ekristen/go-telemetry/logger/logrus"
-)
-
-// Create logrus logger with just logger settings
-// ServiceName/Version will be set automatically by telemetry
-logrusLog := logruslogger.New(logruslogger.Options{
-    Output:      os.Stdout,
-    EnableColor: true,
-    JSONFormat:  false,
-})
-
-// Pass to telemetry - it handles service info and OTel integration
-t, err := telemetry.New(ctx, &telemetry.Options{
-    ServiceName:    "my-service",
-    ServiceVersion: "1.0.0",
-    Logger:         logrusLog,
-})
-
-// Access full logrus API
-log := t.Logger()
-if logrusLogger, ok := log.(*logruslogger.Logger); ok {
-    logrusLogger.Logger.WithFields(map[string]interface{}{
-        "user_id": "123",
-        "action":  "login",
-    }).Info("User action")
-}
-```
-
-### Zap
-
-To use Uber's zap logger:
-
-```go
-import (
-    "os"
-    zaplogger "github.com/ekristen/go-telemetry/logger/zap"
-    "go.uber.org/zap"
-)
-
-// Create zap logger with just logger settings
-// ServiceName/Version will be set automatically by telemetry
-zapLog := zaplogger.New(zaplogger.Options{
-    Output:       os.Stdout,
-    EnableCaller: true,
-    Development:  true,  // Pretty console output
-    JSONFormat:   false,
-})
-
-// Pass to telemetry - it handles service info and OTel integration
-t, err := telemetry.New(ctx, &telemetry.Options{
-    ServiceName:    "my-service",
-    ServiceVersion: "1.0.0",
-    Logger:         zapLog,
-})
-
-// Access full zap API
-log := t.Logger()
-if zapLogger, ok := log.(*zaplogger.Logger); ok {
-    zapLogger.Logger.Info("Processing request",
-        zap.String("user_id", "123"),
-        zap.String("action", "login"),
-        zap.Int("duration_ms", 150),
-    )
-
-    // Use SugaredLogger for printf-style
-    zapLogger.Logger.Sugar().Infow("User action",
-        "user", "john",
-        "action", "login",
-    )
-}
-```
-
-### Slog
-
-To use Go's standard library slog logger:
-
-```go
-import (
-    "log/slog"
-    "os"
-    sloglogger "github.com/ekristen/go-telemetry/logger/slog"
-)
-
-// Create slog logger with just logger settings
-// ServiceName/Version will be set automatically by telemetry
-slogLog := sloglogger.New(sloglogger.Options{
-    Output:     os.Stdout,
-    Level:      slog.LevelDebug,
-    AddSource:  true, // Add source file:line info
-    JSONFormat: false,
-})
-
-// Pass to telemetry - it handles service info and OTel integration
-t, err := telemetry.New(ctx, &telemetry.Options{
-    ServiceName:    "my-service",
-    ServiceVersion: "1.0.0",
-    Logger:         slogLog,
-})
-
-// Access full slog API
-log := t.Logger()
-if slogLogger, ok := log.(*sloglogger.Logger); ok {
-    slogLogger.Logger.Info("Processing request",
-        slog.String("user_id", "123"),
-        slog.String("action", "login"),
-    )
-
-    // Use slog groups
-    slogLogger.Logger.Info("Request completed",
-        slog.Group("request",
-            slog.Int("duration_ms", 150),
-            slog.Bool("success", true),
-        ),
-    )
-}
-```
-
-## Log Levels
-
-The library supports standard log levels with a common interface across all logger implementations:
-
-```go
-logger := t.Logger()
-
-// Trace - Most verbose, for detailed debugging (more verbose than debug)
-logger.Trace().Str("detail", "very detailed info").Msg("Trace message")
-
-// Debug - Debug-level messages
-logger.Debug().Int("count", 5).Msg("Debug message")
-
-// Info - Informational messages
-logger.Info().Str("status", "running").Msg("Info message")
-
-// Warn - Warning messages
-logger.Warn().Msg("Warning message")
-
-// Error - Error messages
-logger.Error().Err(err).Msg("Error message")
-
-// Fatal - Fatal messages (calls os.Exit(1))
-logger.Fatal().Msg("Fatal error")
-
-// Panic - Panic messages (calls panic())
-logger.Panic().Msg("Panic message")
-```
-
-### Log Level Support by Backend
-
-| Level | Zerolog | Logrus | Zap | Slog | Notes |
-|-------|---------|--------|-----|------|-------|
-| Trace | ✅ Native | ✅ Native | ⚠️ Custom | ⚠️ Custom | Zap/Slog use custom levels |
-| Debug | ✅ | ✅ | ✅ | ✅ | |
-| Info | ✅ | ✅ | ✅ | ✅ | |
-| Warn | ✅ | ✅ | ✅ | ✅ | |
-| Error | ✅ | ✅ | ✅ | ✅ | |
-| Fatal | ✅ | ✅ | ✅ | ⚠️ Maps to Error | Slog doesn't have Fatal |
-| Panic | ✅ | ✅ | ✅ | ⚠️ Maps to Error | Slog doesn't have Panic |
-
-**Notes:**
-- **Trace**: Zerolog and Logrus have native trace levels. Zap uses `DebugLevel - 1`, Slog uses `LevelDebug - 4`
-- **Fatal/Panic**: Slog doesn't have fatal/panic levels, so they map to Error with additional behavior (os.Exit/panic)
-- All levels work through the common interface regardless of native support
-
-### Setting Log Level
-
-```go
-import "github.com/ekristen/go-telemetry/logger"
-
-// Set the minimum log level
-logger.SetLevel(logger.TraceLevel)  // Show all logs including trace
-logger.SetLevel(logger.DebugLevel)  // Show debug and above
-logger.SetLevel(logger.InfoLevel)   // Show info and above (typical production)
-logger.SetLevel(logger.WarnLevel)   // Show only warnings and errors
-logger.SetLevel(logger.ErrorLevel)  // Show only errors
-logger.SetLevel(logger.Disabled)    // Disable all logging
-
-// Get current level
-currentLevel := logger.Level()
-```
+See the [examples](#examples) directory for complete working examples of each logger.
 
 ## Metrics
 
@@ -526,7 +488,7 @@ export PROMETHEUS_PORT=9090
 export PROMETHEUS_PATH=/metrics
 ```
 
-See the [metrics-prometheus example](./examples/metrics-prometheus) for a complete working example with the built-in server.
+See the [examples/metrics-prometheus](./examples/metrics-prometheus) example for a complete working example with the built-in server.
 
 #### Integrating with Popular Frameworks
 
@@ -542,7 +504,7 @@ handler := t.PrometheusHandler()
 // Gorilla: r.Handle("/metrics", handler)
 ```
 
-See the [metrics-prometheus-custom-server example](./examples/metrics-prometheus-custom-server) for a complete working example.
+See the [examples/metrics-prometheus-custom-server](./examples/metrics-prometheus-custom-server) example for a complete working example.
 
 ### Using Metrics
 
@@ -583,7 +545,7 @@ gauge, _ := meter.Int64ObservableGauge("memory_usage_bytes",
 | Best for | Cloud-native, distributed systems | Traditional monitoring, simple setups |
 | Format | Protobuf (OTLP) | Prometheus exposition format |
 
-See the [metrics-prometheus example](./examples/metrics-prometheus) for a complete working example.
+See the [examples/metrics-prometheus](./examples/metrics-prometheus) example for a complete working example.
 
 ### Dual Export (Prometheus + OTLP)
 
@@ -619,6 +581,8 @@ This allows you to:
 - Different teams using different observability platforms
 - A/B testing between monitoring solutions
 
+See the [examples/metrics-dual-export](./examples/metrics-dual-export) example for a complete working example.
+
 ## Tracing
 
 ### Basic Tracing
@@ -630,95 +594,108 @@ defer span.End()
 // Your operation here
 ```
 
-### Tracing with Logger
+### Tracing with Logger and Context
+
+The logger hooks/handlers will automatically extract trace information from the context when logging:
 
 ```go
-ctx, span, logger := t.StartSpanWithLogger(ctx, "operation-name")
+ctx, span := t.StartSpan(ctx, "operation-name")
 defer span.End()
 
-// Logger has the span context attached
-logger.Info().Msg("Processing within span")
+// Logger extracts trace context from the span in ctx
+log.WithContext(ctx).Info("Processing within span")
 ```
 
 ## Architecture
 
 ```
 telemetry/
-├── config.go           # Configuration management
-├── telemetry.go        # Main telemetry struct
+├── config.go           # Configuration management and env var handling
+├── telemetry.go        # Main telemetry struct and public API
 ├── providers.go        # OTel provider initialization
 ├── interface.go        # ITelemetry interface
-├── logger/
-│   ├── interface.go    # Common logger interface
-│   ├── zerolog/
-│   │   ├── zerolog.go  # Zerolog implementation
-│   │   ├── otel_hook.go # OTel integration
-│   │   └── console.go  # Console writer utilities
+├── hooks/
 │   ├── logrus/
-│   │   ├── logrus.go   # Logrus implementation
-│   │   └── otel_hook.go # OTel integration
-│   └── zap/
-│       ├── zap.go      # Zap implementation
-│       └── otel_core.go # OTel integration
+│   │   └── logrus.go   # Logrus hook for OTel integration
+│   ├── zap/
+│   │   └── zap.go      # Zap core for OTel integration
+│   ├── zerolog/
+│   │   └── zerolog.go  # Zerolog hook for OTel integration
+│   └── slog/
+│       └── slog.go     # Slog handler for OTel integration
 └── examples/
-    ├── basic/          # Basic usage without OTel
-    ├── with-otel/      # Usage with OTel enabled
-    ├── full-zerolog-api/ # Advanced zerolog features
-    ├── logrus-basic/   # Logrus usage example
-    └── zap-basic/      # Zap usage example
+    ├── logrus/         # Logrus external hook example
+    ├── zap/            # Zap external core example
+    ├── zerolog/        # Zerolog external hook example
+    ├── slog/           # Slog external handler example
+    ├── metrics/        # OTLP metrics example
+    ├── metrics-prometheus/  # Prometheus with built-in server
+    ├── metrics-prometheus-custom-server/  # Prometheus with custom server
+    └── metrics-dual-export/  # Prometheus + OTLP dual export
 ```
 
 ## Design Philosophy
 
-1. **OTel is Optional**: The library works perfectly without OTel. Enable it only when you need distributed tracing and metrics.
+1. **External Logger Creation**: You create and configure your logger - we provide hooks/cores/handlers to attach
 
-2. **Full Logger Control**: You're not limited to a subset of logging features. Access the complete logger API.
+2. **Non-Invasive Integration**: OTel hooks don't modify logger behavior or wrap your code
 
-3. **Zero Abstraction Overhead**: When OTel is disabled, there's no performance penalty.
+3. **Native API Usage**: Use your logger's idiomatic API directly - no wrapper interface needed
 
-4. **Swappable Backends**: Support for multiple logging frameworks (zerolog, logrus, and more).
+4. **Accurate Caller Reporting**: All loggers support accurate caller info with external hook pattern
 
-## Local OTel Bridges
+5. **OTel is Optional**: Works perfectly without OTel. Enable only when you need observability.
 
-This library includes local implementations of OTel integrations for each logger backend:
-- **Zerolog**: Custom OTel hook for zerolog integration
-- **Logrus**: Custom OTel hook for logrus integration
-- **Zap**: Custom OTel core for zap integration
-- Allows you to customize integration behavior
-- Keeps dependencies under control
-- Ensures compatibility with your specific use case
+6. **Zero Abstraction Overhead**: When OTel is disabled, there's no performance penalty.
 
 ## Examples
 
-See the [examples](./examples) directory for complete working examples:
+All examples demonstrate the **external hook/core/handler pattern** with accurate caller reporting:
 
-- [`basic`](./examples/basic) - Basic usage with zerolog, OTel disabled
-- [`with-otel`](./examples/with-otel) - Full OTel integration with tracing
-- [`traces-nested`](./examples/traces-nested) - Nested spans with attributes and events
-- [`metrics`](./examples/metrics) - Counter, histogram, gauge examples with OTLP
-- [`metrics-prometheus`](./examples/metrics-prometheus) - Prometheus metrics with built-in HTTP server
-- [`metrics-prometheus-custom-server`](./examples/metrics-prometheus-custom-server) - Prometheus with your own HTTP server
-- [`metrics-dual-export`](./examples/metrics-dual-export) - Export metrics to both Prometheus and OTLP
-- [`full-zerolog-api`](./examples/full-zerolog-api) - Advanced zerolog features
-- [`zerolog-basic`](./examples/zerolog-basic) - Basic zerolog usage
-- [`logrus-basic`](./examples/logrus-basic) - Basic usage with logrus
-- [`logrus-byo`](./examples/logrus-byo) - Bring your own logrus logger
-- [`zap-basic`](./examples/zap-basic) - Basic usage with zap (simplified pattern)
-- [`slog-basic`](./examples/slog-basic) - Basic usage with slog (simplified pattern)
+- **[`logrus`](./examples/logrus)** - ✅ Create logrus logger, attach OTel hook externally
+- **[`zap`](./examples/zap)** - ✅ Create zap core, combine with OTel core using NewTee
+- **[`zerolog`](./examples/zerolog)** - ✅ Create zerolog logger, attach OTel hook externally
+- **[`slog`](./examples/slog)** - ✅ Create slog handler, wrap with OTel handler
+- **[`metrics`](./examples/metrics)** - Counter, histogram, gauge examples with OTLP
+- **[`metrics-prometheus`](./examples/metrics-prometheus)** - Prometheus metrics with built-in HTTP server
+- **[`metrics-prometheus-custom-server`](./examples/metrics-prometheus-custom-server)** - Prometheus with your own HTTP server
+- **[`metrics-dual-export`](./examples/metrics-dual-export)** - Export metrics to both Prometheus and OTLP
 
-## Known Issues
+All examples show **accurate caller reporting** and **native API usage**.
 
-### Zerolog Attributes Not Passed to OTel
+## Key Features
 
-There is a bug in the zerolog hook handler that prevents log attributes (fields) from being passed to OpenTelemetry. This means that while logs are exported to OTel, any structured fields you add (like `.Str("key", "value")`) are not included in the OTel log records.
+### Accurate Caller Reporting for All Loggers
 
-**Status**: An open PR exists to fix this issue: https://github.com/rs/zerolog/pull/682
+All four major Go loggers now support **accurate caller reporting** with the external hook/core/handler pattern:
 
-**Workaround**: Until the fix is merged and released:
-- Use a different logger backend (logrus, zap, or slog) if you need OTel log attributes
-- Or wait for the zerolog fix to be merged and update your zerolog dependency
+```go
+// All of these show accurate caller info (yourfile.go:42):
 
-**What works**: Log messages and log levels are still correctly exported to OTel, only the additional attributes are missing.
+// Logrus (with SetReportCaller before AddHook)
+log.WithField("key", "val").Info("message")
+
+// Zap (with zap.AddCaller())
+log.Info("message", zap.String("key", "val"))
+
+// Zerolog (with Caller())
+log.Info().Str("key", "val").Msg("message")
+
+// Slog (with AddSource: true)
+log.Info("message", slog.String("key", "val"))
+```
+
+### Non-Invasive OpenTelemetry Integration
+
+Logs go to **both** your configured output AND OpenTelemetry:
+
+```go
+// Your logger outputs to console
+// OTel hook/core/handler sends to collector
+// Same log, two destinations!
+```
+
+No code changes needed - just attach the hook/core/handler once.
 
 ## Contributing
 

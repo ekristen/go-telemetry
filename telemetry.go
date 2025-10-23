@@ -3,22 +3,20 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel"
+	otellog "go.opentelemetry.io/otel/log"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
-
-	"github.com/ekristen/go-telemetry/logger"
-	zerologger "github.com/ekristen/go-telemetry/logger/zerolog"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 type Telemetry struct {
@@ -28,8 +26,8 @@ type Telemetry struct {
 	mp *sdkmetric.MeterProvider
 	tp *sdktrace.TracerProvider
 
+	logger otellog.Logger
 	tracer trace.Tracer
-	logger logger.Logger
 
 	// Prometheus-specific fields
 	promServer  *http.Server
@@ -105,8 +103,8 @@ func (t *Telemetry) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// Logger returns the logger.
-func (t *Telemetry) Logger() logger.Logger {
+// Logger returns the OTel logger.
+func (t *Telemetry) Logger() otellog.Logger {
 	return t.logger
 }
 
@@ -134,15 +132,10 @@ func (t *Telemetry) TracerProvider() *sdktrace.TracerProvider {
 }
 
 // StartSpan starts a new span with the given name. The span must be ended by calling End.
+// The returned context contains the span information which will be automatically extracted
+// by the logger's OTel integration (for supported loggers like Zap, Zerolog, Logrus, Slog).
 func (t *Telemetry) StartSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 	return t.tracer.Start(ctx, name)
-}
-
-// StartSpanWithLogger starts a new span with the given name and returns the context, span, and logger with the span context.
-func (t *Telemetry) StartSpanWithLogger(ctx context.Context, name string) (context.Context, trace.Span, logger.Logger) {
-	ctx, span := t.tracer.Start(ctx, name)
-	logger := t.logger.WithContext(ctx)
-	return ctx, span, logger
 }
 
 // PrometheusHandler returns the Prometheus HTTP handler for metrics.
@@ -150,6 +143,22 @@ func (t *Telemetry) StartSpanWithLogger(ctx context.Context, name string) (conte
 // Use this to integrate Prometheus metrics into your own HTTP server.
 func (t *Telemetry) PrometheusHandler() http.Handler {
 	return t.promHandler
+}
+
+// ServiceName returns the configured service name.
+func (t *Telemetry) ServiceName() string {
+	if t.cfg == nil {
+		return ""
+	}
+	return t.cfg.ServiceName
+}
+
+// ServiceVersion returns the configured service version.
+func (t *Telemetry) ServiceVersion() string {
+	if t.cfg == nil {
+		return ""
+	}
+	return t.cfg.ServiceVersion
 }
 
 // New creates a new Telemetry instance with the given options.
@@ -171,6 +180,7 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 	var lp *sdklog.LoggerProvider
 	var mp *sdkmetric.MeterProvider
 	var tp *sdktrace.TracerProvider
+	var logger otellog.Logger
 	var tracer trace.Tracer
 	var promServer *http.Server
 	var promHandler http.Handler
@@ -190,6 +200,13 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 		return nil, fmt.Errorf("failed to create logger provider: %w", err)
 	}
 
+	if lp != nil {
+		logger = lp.Logger(opts.ServiceName)
+	} else {
+		// Use noop logger if logs are disabled (default OTel behavior)
+		logger = lognoop.NewLoggerProvider().Logger(opts.ServiceName)
+	}
+
 	tp, err = newTracerProvider(ctx, res, opts.BatchExport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tracer provider: %w", err)
@@ -199,7 +216,7 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 		tracer = tp.Tracer(opts.ServiceName)
 	} else {
 		// Use noop tracer if traces are disabled (default OTel behavior)
-		tracer = noop.NewTracerProvider().Tracer(opts.ServiceName)
+		tracer = tracenoop.NewTracerProvider().Tracer(opts.ServiceName)
 	}
 
 	// Initialize meter provider based on exporter type
@@ -288,47 +305,13 @@ func newWithOptions(ctx context.Context, opts *Options) (*Telemetry, error) {
 		}
 	}
 
-	// Use provided logger or create default zerolog logger
-	var log logger.Logger
-	if opts.Logger != nil {
-		log = opts.Logger
-
-		// Update logger with service name and version if it supports it
-		if optUpdater, ok := log.(logger.LoggerOptionsUpdater); ok {
-			optUpdater.SetOptions(opts.ServiceName, opts.ServiceVersion)
-		}
-
-		// If logger was provided, update it with the OTel logger provider
-		if lp != nil {
-			if providerUpdater, ok := log.(logger.LoggerProviderUpdater); ok {
-				providerUpdater.UpdateLoggerProvider(lp)
-			}
-		}
-	} else {
-		// Create default zerolog logger
-		var output io.Writer = os.Stdout
-		if opts.LogConsoleOutput {
-			cw := zerologger.NewConsoleWriter(opts.LogConsoleColor)
-			output = cw
-		}
-
-		log = zerologger.New(zerologger.Options{
-			ServiceName:    opts.ServiceName,
-			ServiceVersion: opts.ServiceVersion,
-			LoggerProvider: lp,
-			Output:         output,
-			EnableCaller:   true,
-			EnableColor:    opts.LogConsoleColor,
-		})
-	}
-
 	return &Telemetry{
 		cfg:         opts,
 		lp:          lp,
 		mp:          mp,
 		tp:          tp,
+		logger:      logger,
 		tracer:      tracer,
-		logger:      log,
 		promServer:  promServer,
 		promHandler: promHandler,
 	}, nil

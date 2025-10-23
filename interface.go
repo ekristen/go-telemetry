@@ -3,8 +3,6 @@ package telemetry
 import (
 	"context"
 
-	"github.com/ekristen/go-telemetry/logger"
-
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -16,8 +14,6 @@ type ITelemetry interface {
 	// Shutdown shuts down all telemetry providers.
 	Shutdown(ctx context.Context)
 
-	// Logger returns the logger instance.
-	Logger() logger.Logger
 	// Tracer returns the tracer instance.
 	Tracer() trace.Tracer
 
@@ -29,7 +25,7 @@ type ITelemetry interface {
 	TracerProvider() *sdktrace.TracerProvider
 
 	// StartSpan starts a new span with the given name.
+	// The returned context contains the span information which will be automatically extracted
+	// by the logger's OTel integration.
 	StartSpan(ctx context.Context, name string) (context.Context, trace.Span)
-	// StartSpanWithLogger starts a new span and returns a logger with the span context.
-	StartSpanWithLogger(ctx context.Context, name string) (context.Context, trace.Span, logger.Logger)
 }
