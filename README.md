@@ -31,7 +31,7 @@ package main
 import (
     "context"
     "github.com/ekristen/go-telemetry/v2"
-    logrushook "github.com/ekristen/go-telemetry/v2/hooks/logrus"
+    logrushook "github.com/ekristen/go-telemetry/hooks/logrus/v2"
     "github.com/sirupsen/logrus"
 )
 
@@ -68,10 +68,10 @@ All loggers follow the same pattern: create your logger, initialize telemetry, a
 
 | Logger | Integration | Package |
 |--------|-------------|---------|
-| **Logrus** | Hook | `github.com/ekristen/go-telemetry/v2/hooks/logrus` |
-| **Zap** | Core | `github.com/ekristen/go-telemetry/v2/hooks/zap` |
-| **Zerolog** | Hook | `github.com/ekristen/go-telemetry/v2/hooks/zerolog` |
-| **Slog** | Handler | `github.com/ekristen/go-telemetry/v2/hooks/slog` |
+| **Logrus** | Hook | `github.com/ekristen/go-telemetry/hooks/logrus/v2` |
+| **Zap** | Core | `github.com/ekristen/go-telemetry/hooks/zap/v2` |
+| **Zerolog** | Hook | `github.com/ekristen/go-telemetry/hooks/zerolog/v2` |
+| **Slog** | Handler | `github.com/ekristen/go-telemetry/hooks/slog/v2` |
 
 **Caller Reporting**: All loggers support accurate caller info when using the external hook/handler pattern. Enable caller reporting in your logger before attaching the OTel integration.
 
