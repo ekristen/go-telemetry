@@ -3,7 +3,7 @@ module github.com/ekristen/go-telemetry/hooks/zerolog/v2
 go 1.25.1
 
 require (
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	go.opentelemetry.io/otel/log v0.19.0
 	go.opentelemetry.io/otel/sdk/log v0.19.0
 )
