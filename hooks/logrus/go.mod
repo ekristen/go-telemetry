@@ -3,7 +3,7 @@ module github.com/ekristen/go-telemetry/hooks/logrus/v2
 go 1.25.1
 
 require (
-	github.com/sirupsen/logrus v1.10.1
+	github.com/sirupsen/logrus v1.10.2
 	go.opentelemetry.io/otel/log v0.21.0
 	go.opentelemetry.io/otel/sdk/log v0.21.0
 )
