@@ -1,6 +1,6 @@
 module github.com/ekristen/go-telemetry/v2
 
-go 1.25.1
+go 1.26.0
 
 require (
 	github.com/prometheus/client_golang v1.24.1
@@ -36,8 +36,8 @@ require (
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260918162117-cecb64721679 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260917231906-eeb232e0883d // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
