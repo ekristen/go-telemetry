@@ -3,7 +3,7 @@ module github.com/ekristen/go-telemetry/v2
 go 1.26.0
 
 require (
-	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_golang v1.25.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.22.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
