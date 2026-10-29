@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	go.opentelemetry.io/otel/log v1.47.0
-	go.opentelemetry.io/otel/sdk/log v0.22.0
+	go.opentelemetry.io/otel/sdk/log v1.47.0
 )
 
 require (
