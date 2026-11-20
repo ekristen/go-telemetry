@@ -34,6 +34,6 @@ jobs:
           private_key: ${{ secrets.DEV_APP_PEM }}
           revoke: true
       - name: release
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@ad51787758d9654d5a75150a89a6fa9b3ccef95e # v8.1.4
         env:
           GITHUB_TOKEN: ${{ steps.generate_token.outputs.token }}
